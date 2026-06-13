@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import { characters } from '@/data/characters'
@@ -12,6 +13,7 @@ import { getCharacterIdFromCostumeId } from '@/utils/getCharacterIdFromCostumeId
 const collapsed = ref(true)
 const selectedMenu = ref('Characters')
 const currentLocale = ref<Locale>('zh-CN')
+const router = useRouter()
 
 const menuItems = [
   { name: 'Characters', icon: '/assets/icons/ui/icon_characters.png' },
@@ -49,6 +51,10 @@ function toggleSidebar() {
 
 function selectMenu(name: string) {
   selectedMenu.value = name
+
+  if (name === 'Characters') {
+    router.push({ name: 'characters' })
+  }
 }
 </script>
 
