@@ -15,6 +15,7 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@lucide/vue": "^1.17.0",
     "@pixi-spine/all-4.1": "^4.0.6",
     "pinia": "^3.0.4",
     "pixi.js": "^7.4.3",

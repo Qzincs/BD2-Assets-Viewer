@@ -51,7 +51,13 @@ export type PlaySequenceOptions = {
     trackIndex?: number
 
     /**
-     * Whether the last animation should loop. If false, it will play once and stop at the last frame (if holdLast is true) or immediately end (if holdLast is false).
+     * Whether the whole sequence should loop from the first animation after it finishes.
+     */
+    loop?: boolean
+
+    /**
+     * Convenience option for playing the last animation again after the sequence finishes.
+     * Equivalent to next: { animationName: lastAnimationName, loop: true }.
      */
     loopLast?: boolean
 
@@ -157,4 +163,81 @@ export type SpineComposition = {
     sharedLayout?: SpineLayoutOptions
 
     layers: SpineCompositionLayer[]
+}
+
+type PlaybackOptionBase = {
+    /**
+     * Stable id used by UI controls and playback state.
+     */
+    id: string
+
+    /**
+     * Human-readable label shown in player controls.
+     */
+    label: string
+
+    /**
+     * Whether this option should appear in the animation dropdown.
+     * Hidden options can still be played programmatically.
+     */
+    showInMenu?: boolean
+}
+
+/**
+ * A playable item exposed to the player controls.
+ *
+ * This is higher-level than a raw Spine animation name. One option may map to
+ * a single animation, a queued sequence, multiple parallel tracks, or a full
+ * composition.
+ */
+export type PlayerAnimationOption =
+    | (PlaybackOptionBase & {
+        type: 'single'
+        animationName: string
+        loop?: boolean
+    })
+    | (PlaybackOptionBase & {
+        type: 'sequence'
+        animationNames: string[]
+        loop?: boolean
+        loopLast?: boolean
+        next?: {
+            animationName: string
+            loop?: boolean
+        }
+    })
+    | (PlaybackOptionBase & {
+        type: 'tracks'
+        tracks: TrackAnimation[]
+        loop?: boolean
+    })
+    | (PlaybackOptionBase & {
+        type: 'composition'
+        composition: SpineComposition
+        loop?: boolean
+    })
+
+/**
+ * Runtime playback state exposed to UI controls.
+ */
+export type PlaybackState = {
+    /**
+     * Whether playback is still inside the selected item or has moved to its follow-up animation.
+     */
+    phase: 'main' | 'next'
+
+    /**
+     * Raw Spine animation currently active on the inspected track.
+     */
+    currentAnimationName?: string
+
+    /**
+     * Normalized progress for the active phase.
+     */
+    progress: number
+
+    /**
+     * Whether the active phase is looping.
+     */
+    loop: boolean
 }

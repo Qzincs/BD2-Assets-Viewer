@@ -1,7 +1,9 @@
 import * as PIXI from 'pixi.js'
 import { Spine } from '@pixi-spine/all-4.1'
 import { SpineInstance } from './SpineInstance'
+import type { CameraTransform } from '@/player/camera/types'
 import type {
+    PlaybackState,
     PlayAnimationOptions,
     PlaySequenceOptions,
     SpineComposition,
@@ -11,11 +13,21 @@ import type {
     TrackAnimation,
 } from './types'
 
+const defaultCameraTransform: CameraTransform = {
+    x: 0,
+    y: 0,
+    scale: 1,
+}
+
+const minCameraScale = 0.2
+const maxCameraScale = 5
+
 export class SpinePlayer {
     private app: PIXI.Application
     private container: HTMLElement
 
     private debugLayer: PIXI.Graphics
+    private cameraLayer: PIXI.Container
     private boundsDebugLayer: PIXI.Graphics
     private instanceLayer: PIXI.Container
 
@@ -23,6 +35,8 @@ export class SpinePlayer {
     private layouts = new Map<string, SpineLayoutOptions>()
 
     private debugVisible: boolean
+    private cameraEnabled = false
+    private cameraTransform: CameraTransform = { ...defaultCameraTransform }
 
     constructor(options: SpinePlayerOptions) {
         this.container = options.container
@@ -39,14 +53,16 @@ export class SpinePlayer {
         this.container.appendChild(this.app.view as HTMLCanvasElement)
 
         this.debugLayer = new PIXI.Graphics()
+        this.cameraLayer = new PIXI.Container()
         this.instanceLayer = new PIXI.Container()
         this.boundsDebugLayer = new PIXI.Graphics()
 
         this.instanceLayer.sortableChildren = true
 
         this.app.stage.addChild(this.debugLayer)
-        this.app.stage.addChild(this.instanceLayer)
-        this.app.stage.addChild(this.boundsDebugLayer)
+        this.app.stage.addChild(this.cameraLayer)
+        this.cameraLayer.addChild(this.instanceLayer)
+        this.cameraLayer.addChild(this.boundsDebugLayer)
 
         this.resize()
     }
@@ -124,6 +140,13 @@ export class SpinePlayer {
         this.instances.get(id)?.playTracks(tracks)
     }
 
+    /**
+     * Clears all animation tracks on one instance.
+     */
+    clearTracks(id = 'main') {
+        this.instances.get(id)?.clearTracks()
+    }
+
     async playComposition(composition: SpineComposition) {
         if (composition.clearBeforePlay ?? true) {
             this.clearInstances()
@@ -188,6 +211,66 @@ export class SpinePlayer {
         return this.instances.get(id)?.getAnimationNames() ?? []
     }
 
+    /**
+     * Returns the animation currently active on an instance track.
+     */
+    getCurrentAnimation(id = 'main', trackIndex = 0): string | undefined {
+        return this.instances.get(id)?.getCurrentAnimation(trackIndex)
+    }
+
+    /**
+     * Returns normalized progress for one instance.
+     *
+     * The value represents the instance's logical playback timeline, not just a
+     * raw Spine TrackEntry. Sequences are accumulated across segments.
+     */
+    getProgress(id = 'main', trackIndex = 0): number {
+        return this.instances.get(id)?.getProgress(trackIndex) ?? 0
+    }
+
+    /**
+     * Returns runtime playback state for one instance.
+     */
+    getPlaybackState(id = 'main', trackIndex = 0): PlaybackState | undefined {
+        return this.instances.get(id)?.getPlaybackState(trackIndex)
+    }
+
+    /**
+     * Seeks one instance to a normalized progress value.
+     */
+    seekProgress(progress: number, id = 'main') {
+        this.instances.get(id)?.seekProgress(progress)
+    }
+
+    /**
+     * Returns the logical playback duration for one instance.
+     */
+    getPlaybackDuration(id = 'main'): number {
+        return this.instances.get(id)?.getPlaybackDuration() ?? 0
+    }
+
+    /**
+     * Returns progress for the longest active instance.
+     *
+     * This is intended for composed playback where multiple instances run in
+     * parallel and the control bar should represent the longest layer.
+     */
+    getLongestProgress(): number {
+        const instance = this.getLongestInstance()
+        return instance?.getProgress() ?? 0
+    }
+
+    /**
+     * Seeks all active instances to the same normalized progress value.
+     *
+     * Each instance clamps the target time to its own duration.
+     */
+    seekAllProgress(progress: number) {
+        for (const instance of this.instances.values()) {
+            instance.seekProgress(progress)
+        }
+    }
+
     setDefaultMix(duration: number, id = 'main') {
         this.instances.get(id)?.setDefaultMix(duration)
     }
@@ -224,6 +307,81 @@ export class SpinePlayer {
         this.instances.get(id)?.setSpeed(speed)
     }
 
+    /**
+     * Enables or disables manual camera transform changes.
+     */
+    setCameraEnabled(enabled: boolean) {
+        this.cameraEnabled = enabled
+    }
+
+    /**
+     * Returns whether manual camera controls are enabled.
+     */
+    getCameraEnabled(): boolean {
+        return this.cameraEnabled
+    }
+
+    /**
+     * Returns a copy of the current camera transform.
+     */
+    getCameraTransform(): CameraTransform {
+        return { ...this.cameraTransform }
+    }
+
+    /**
+     * Applies an absolute camera transform to the camera layer.
+     */
+    setCameraTransform(transform: Partial<CameraTransform>) {
+        this.cameraTransform = {
+            ...this.cameraTransform,
+            ...transform,
+            scale: this.clampCameraScale(transform.scale ?? this.cameraTransform.scale),
+        }
+
+        this.applyCameraTransform()
+        this.drawSpineBoundsDebug()
+    }
+
+    /**
+     * Moves the camera layer by a screen-space delta.
+     */
+    panCamera(deltaX: number, deltaY: number) {
+        if (!this.cameraEnabled) return
+
+        this.setCameraTransform({
+            x: this.cameraTransform.x + deltaX,
+            y: this.cameraTransform.y + deltaY,
+        })
+    }
+
+    /**
+     * Zooms the camera around a screen-space anchor point.
+     */
+    zoomCameraAt(screenX: number, screenY: number, scaleFactor: number) {
+        if (!this.cameraEnabled) return
+
+        const oldScale = this.cameraTransform.scale
+        const nextScale = this.clampCameraScale(oldScale * scaleFactor)
+
+        if (nextScale === oldScale) return
+
+        const worldX = (screenX - this.cameraTransform.x) / oldScale
+        const worldY = (screenY - this.cameraTransform.y) / oldScale
+
+        this.setCameraTransform({
+            scale: nextScale,
+            x: screenX - worldX * nextScale,
+            y: screenY - worldY * nextScale,
+        })
+    }
+
+    /**
+     * Restores the camera layer to its default transform.
+     */
+    resetCamera() {
+        this.setCameraTransform(defaultCameraTransform)
+    }
+
     setInstanceLayout(id: string, layout: SpineLayoutOptions) {
         const oldLayout = this.layouts.get(id) ?? {}
 
@@ -244,6 +402,8 @@ export class SpinePlayer {
         for (const id of this.instances.keys()) {
             this.layoutInstance(id)
         }
+
+        this.resetCamera()
     }
 
     resize() {
@@ -325,6 +485,40 @@ export class SpinePlayer {
         spine.y = targetY
     }
 
+    /**
+     * Applies the current camera transform to the camera layer.
+     */
+    private applyCameraTransform() {
+        this.cameraLayer.position.set(this.cameraTransform.x, this.cameraTransform.y)
+        this.cameraLayer.scale.set(this.cameraTransform.scale)
+    }
+
+    /**
+     * Keeps camera zoom within a practical viewer range.
+     */
+    private clampCameraScale(scale: number): number {
+        return Math.min(maxCameraScale, Math.max(minCameraScale, scale))
+    }
+
+    /**
+     * Finds the instance with the longest logical playback duration.
+     */
+    private getLongestInstance(): SpineInstance | undefined {
+        let longestInstance: SpineInstance | undefined
+        let longestDuration = 0
+
+        for (const instance of this.instances.values()) {
+            const duration = instance.getPlaybackDuration()
+
+            if (duration > longestDuration) {
+                longestInstance = instance
+                longestDuration = duration
+            }
+        }
+
+        return longestInstance
+    }
+
     private drawDebugStage(width: number, height: number) {
         this.debugLayer.clear()
         this.debugLayer.visible = this.debugVisible
@@ -354,17 +548,24 @@ export class SpinePlayer {
         for (const instance of this.instances.values()) {
             const spine = instance.displayObject
             const bounds = spine.getBounds()
+            const topLeft = this.cameraLayer.toLocal(new PIXI.Point(bounds.x, bounds.y))
+            const bottomRight = this.cameraLayer.toLocal(new PIXI.Point(
+                bounds.x + bounds.width,
+                bounds.y + bounds.height,
+            ))
+            const boundsWidth = bottomRight.x - topLeft.x
+            const boundsHeight = bottomRight.y - topLeft.y
 
             this.boundsDebugLayer.lineStyle(2, 0xff4444, 0.9)
             this.boundsDebugLayer.drawRect(
-                bounds.x,
-                bounds.y,
-                bounds.width,
-                bounds.height,
+                topLeft.x,
+                topLeft.y,
+                boundsWidth,
+                boundsHeight,
             )
 
-            const centerX = bounds.x + bounds.width / 2
-            const centerY = bounds.y + bounds.height / 2
+            const centerX = topLeft.x + boundsWidth / 2
+            const centerY = topLeft.y + boundsHeight / 2
 
             this.boundsDebugLayer.lineStyle(2, 0x44ff44, 0.9)
             this.boundsDebugLayer.moveTo(centerX - 12, centerY)
