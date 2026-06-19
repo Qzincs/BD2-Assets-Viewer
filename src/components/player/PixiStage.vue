@@ -12,9 +12,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     ready: []
+    characterClick: []
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
+const loadError = ref<string>()
 
 let player: SpinePlayer | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -23,7 +25,22 @@ let cameraModeEnabled = false
 let cameraDragging = false
 let lastCameraPointerX = 0
 let lastCameraPointerY = 0
+let loadRequestId = 0
 
+/** Loads the active costume without leaking rejected promises into Vue hooks. */
+async function safelyLoadCurrentCostume() {
+    const requestId = ++loadRequestId
+    loadError.value = undefined
+
+    try {
+        await loadCurrentCostume()
+    } catch (error) {
+        if (requestId !== loadRequestId) return
+
+        loadError.value = `Failed to load ${props.costumeId}`
+        console.error(`[PixiStage] failed to load "${props.costumeId}"`, error)
+    }
+}
 
 async function loadCurrentCostume() {
     if (!player) return
@@ -346,6 +363,23 @@ function zoomCamera(event: WheelEvent) {
     )
 }
 
+/**
+ * Emits an interaction when a click lands inside the main Spine illustration.
+ */
+function handleStageClick(event: MouseEvent) {
+    if (cameraModeEnabled) return
+
+    const rect = containerRef.value?.getBoundingClientRect()
+    if (!rect || rect.width <= 0 || rect.height <= 0) return
+
+    const stageX = event.clientX - rect.left
+    const stageY = event.clientY - rect.top
+
+    if (player?.hitTestInstanceAt(stageX, stageY, 'main')) {
+        emit('characterClick')
+    }
+}
+
 defineExpose({
     playAnimation,
     pause,
@@ -382,13 +416,13 @@ onMounted(async () => {
 
     resizeObserver.observe(containerRef.value)
 
-    await loadCurrentCostume()
+    await safelyLoadCurrentCostume()
 })
 
 watch(
     () => props.costumeId,
     async () => {
-        await loadCurrentCostume()
+        await safelyLoadCurrentCostume()
     },
 )
 
@@ -409,6 +443,14 @@ onBeforeUnmount(() => {
         class="h-full w-full overflow-hidden"
         :class="cameraModeEnabled ? 'cursor-grab active:cursor-grabbing' : ''"
         @pointerdown="startCameraDrag"
+        @click="handleStageClick"
         @wheel="zoomCamera"
-    ></div>
+    >
+        <div
+            v-if="loadError"
+            class="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-red-300"
+        >
+            {{ loadError }}
+        </div>
+    </div>
 </template>

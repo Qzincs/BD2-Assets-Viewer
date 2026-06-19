@@ -101,6 +101,22 @@ export class SpinePlayer {
         return this.instances.get(id)
     }
 
+    /**
+     * Returns whether a screen-space point is inside an instance's current
+     * rendered bounds.
+     *
+     * The bounds include layout and camera transforms, making this suitable for
+     * stage interaction without modifying Spine animation state.
+     */
+    hitTestInstanceAt(screenX: number, screenY: number, id = 'main'): boolean {
+        const instance = this.instances.get(id)
+        if (!instance?.displayObject.visible || instance.displayObject.alpha <= 0) {
+            return false
+        }
+
+        return instance.displayObject.getBounds().contains(screenX, screenY)
+    }
+
     removeInstance(id: string) {
         const instance = this.instances.get(id)
         if (!instance) return
